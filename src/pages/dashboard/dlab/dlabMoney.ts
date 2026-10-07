@@ -4,9 +4,11 @@ import { useLabRecords } from "@/hooks/useLabRecords";
 import { clientOf, isOverdue } from "@/hooks/useDentalLab";
 import { normalizeStage } from "@/config/dentalLab";
 import { useLabInvoices } from "@/hooks/useLabInvoices";
+import { clientKey } from "./dlabLinks";
 
 export const money = (n: number) => `₦${Math.round(Number(n || 0)).toLocaleString()}`;
-const key = (s: string) => (s || "").trim().toLowerCase();
+/** One normalisation everywhere, so "Apex Dental" and "apex dental clinic" share one balance. */
+const key = (s: string) => clientKey(s) || (s || "").trim().toLowerCase();
 
 export interface ClientSummary {
   name: string; cases: number; active: number; late: number; billed: number; wip: number; paid: number; credits: number; balance: number; lastCase: string | null;
@@ -44,7 +46,7 @@ export function useClientSummaries() {
     m.forEach((s) => { s.balance = s.billed - s.paid - s.credits; });
     return [...m.values()].sort((a, b) => b.balance - a.balance);
   }, [cases.data, payments.data, credits.data, invoices.data]);
-  return { data, isLoading: cases.isLoading || payments.isLoading || credits.isLoading || invoices.isLoading, cases: cases.data || [], payments: payments.data || [], credits: credits.data || [] };
+  return { data, isLoading: cases.isLoading || payments.isLoading || credits.isLoading || invoices.isLoading, cases: cases.data || [], invoices: invoices.data || [], payments: payments.data || [], credits: credits.data || [] };
 }
 
 export const sameClient = (a: string, b: string) => key(a) === key(b);
