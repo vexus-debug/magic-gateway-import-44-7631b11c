@@ -12,6 +12,10 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LAB_REGISTERS, type RegisterConfig } from "@/config/dentalLab";
 import { useLabRecords, useSaveLabRecord, useDeleteLabRecord, type LabRecord } from "@/hooks/useLabRecords";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { useLabInvoices } from "@/hooks/useLabInvoices";
+import { useLabClientNames, canonicalClient, clientKey, applyToInvoice } from "./dlabLinks";
 
 const money = (n: number) => `₦${Number(n || 0).toLocaleString()}`;
 
@@ -30,6 +34,53 @@ function Register({ config }: { config: RegisterConfig }) {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
   const [editing, setEditing] = useState<Partial<LabRecord> | null>(null);
+  const qc = useQueryClient();
+  const names = useLabClientNames();
+  const { data: invoices = [] } = useLabInvoices();
+  const isClient = config.titleLabel === "Client clinic";
+  const linksInvoice = config.kind === "client-payments" || config.kind === "credit-notes";
+  const counts = (r: Partial<LabRecord>) => r.status !== "bounced" && r.status !== "void";
+  const clientInvoices = editing && linksInvoice
+    ? invoices.filter((i) => clientKey(i.clinic_code) === clientKey(editing.title || "") &&
+        (i.status !== "paid" || i.id === editing.data?.invoice_id))
+    : [];
+
+  const saveRecord = async () => {
+    if (!editing) return;
+    const rec: Partial<LabRecord> = { ...editing, title: isClient ? canonicalClient(editing.title || "", names) : editing.title };
+    const prev = editing.id ? rows.find((r) => r.id === editing.id) : undefined;
+    const inv = invoices.find((i) => i.id === rec.data?.invoice_id);
+    if (linksInvoice && inv) rec.data = { ...rec.data, invoice: inv.invoice_number };
+    try {
+      if (linksInvoice) {
+        const oldId = prev && counts(prev) ? prev.data?.invoice_id : null;
+        const oldAmt = oldId ? Number(prev!.data?.applied || 0) : 0;
+        const newId = counts(rec) ? rec.data?.invoice_id : null;
+        let applied = 0;
+        if (newId && inv) {
+          const room = Number(inv.total_amount) - Number(inv.amount_paid) + (oldId === newId ? oldAmt : 0);
+          applied = Math.max(0, Math.min(Number(rec.amount || 0), room));
+        }
+        if (oldId && oldId === newId) await applyToInvoice(newId, applied - oldAmt);
+        else { if (oldId) await applyToInvoice(oldId, -oldAmt); if (newId) await applyToInvoice(newId, applied); }
+        rec.data = { ...rec.data, applied };
+        if (config.kind === "credit-notes" && applied > 0 && rec.status === "issued") rec.status = "applied";
+        qc.invalidateQueries({ queryKey: ["lab_invoices"] });
+      }
+      save.mutate(rec, { onSuccess: () => setEditing(null) });
+    } catch (e: any) { toast.error(e.message || "Could not update the invoice"); }
+  };
+
+  const removeRecord = async (r: LabRecord) => {
+    if (!confirm("Remove this entry?")) return;
+    try {
+      if (linksInvoice && counts(r) && r.data?.invoice_id && Number(r.data?.applied || 0) > 0) {
+        await applyToInvoice(r.data.invoice_id, -Number(r.data.applied));
+        qc.invalidateQueries({ queryKey: ["lab_invoices"] });
+      }
+      del.mutate(r.id);
+    } catch (e: any) { toast.error(e.message || "Could not update the invoice"); }
+  };
 
   const visible = useMemo(() => rows.filter((r) =>
     (filter === "all" || r.status === filter) &&
@@ -96,7 +147,7 @@ function Register({ config }: { config: RegisterConfig }) {
                   <span className="text-sm font-semibold">{config.amountLabel ? money(r.amount) : ""}</span>
                   <div className="flex gap-1">
                     <Button size="icon" variant="ghost" aria-label="Edit" onClick={() => setEditing(r)}><Pencil className="h-4 w-4" /></Button>
-                    <Button size="icon" variant="ghost" aria-label="Remove" onClick={() => confirm("Remove this entry?") && del.mutate(r.id)}><Trash2 className="h-4 w-4" /></Button>
+                    <Button size="icon" variant="ghost" aria-label="Remove" onClick={() => removeRecord(r)}><Trash2 className="h-4 w-4" /></Button>
                   </div>
                 </div>
               </CardContent>
@@ -110,7 +161,28 @@ function Register({ config }: { config: RegisterConfig }) {
           <DialogHeader><DialogTitle>{editing?.id ? "Edit" : "Add"} {config.itemName}</DialogTitle></DialogHeader>
           {editing && (
             <div className="grid gap-3">
-              <div><Label>{config.titleLabel}</Label><Input value={editing.title || ""} onChange={(e) => setEditing({ ...editing, title: e.target.value })} /></div>
+              <div><Label>{config.titleLabel}</Label>
+                <Input list={isClient ? "register-client-names" : undefined} value={editing.title || ""} onChange={(e) => setEditing({ ...editing, title: e.target.value })}
+                  onBlur={() => isClient && setEditing({ ...editing, title: canonicalClient(editing.title || "", names) })} />
+                {isClient && <datalist id="register-client-names">{names.map((n) => <option key={n} value={n} />)}</datalist>}
+              </div>
+              {linksInvoice && (
+                <div><Label>Apply to invoice</Label>
+                  <Select value={editing.data?.invoice_id || "none"} onValueChange={(id) => {
+                    const inv = invoices.find((i) => i.id === id);
+                    const data = { ...(editing.data || {}), invoice_id: id === "none" ? "" : id, invoice: inv?.invoice_number || "" };
+                    const due = inv ? Number(inv.total_amount) - Number(inv.amount_paid) : 0;
+                    setEditing({ ...editing, data, amount: inv && !editing.amount ? due : editing.amount });
+                  }}>
+                    <SelectTrigger><SelectValue placeholder="Choose" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Not linked — reduce overall balance only</SelectItem>
+                      {clientInvoices.map((i) => <SelectItem key={i.id} value={i.id}>{i.invoice_number} · {money(Number(i.total_amount) - Number(i.amount_paid))} due</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  {!clientInvoices.length && <p className="mt-1 text-xs text-muted-foreground">{editing.title ? "No open invoices for this clinic." : "Pick the clinic first to see its open invoices."}</p>}
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div><Label>Status</Label>
                   <Select value={editing.status} onValueChange={(v) => setEditing({ ...editing, status: v })}>
@@ -121,7 +193,7 @@ function Register({ config }: { config: RegisterConfig }) {
                 {config.dateLabel && <div><Label>{config.dateLabel}</Label><Input type="date" value={editing.record_date || ""} onChange={(e) => setEditing({ ...editing, record_date: e.target.value })} /></div>}
                 {config.amountLabel && <div><Label>{config.amountLabel}</Label><Input type="number" min={0} value={editing.amount ?? 0} onChange={(e) => setEditing({ ...editing, amount: Number(e.target.value) })} /></div>}
               </div>
-              {config.fields.map((f) => {
+              {config.fields.filter((f) => !(linksInvoice && f.key === "invoice")).map((f) => {
                 const val = editing.data?.[f.key] ?? "";
                 const set = (v: string) => setEditing({ ...editing, data: { ...(editing.data || {}), [f.key]: v } });
                 return (
@@ -140,7 +212,7 @@ function Register({ config }: { config: RegisterConfig }) {
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
-            <Button disabled={!editing?.title?.trim() || save.isPending} onClick={() => save.mutate(editing!, { onSuccess: () => setEditing(null) })}>Save</Button>
+            <Button disabled={!editing?.title?.trim() || save.isPending} onClick={saveRecord}>Save</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
