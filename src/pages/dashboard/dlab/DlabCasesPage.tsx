@@ -16,6 +16,7 @@ import { LAB_STAGES, WORK_TYPES, normalizeStage, stageLabel } from "@/config/den
 import { useLabCases, type LabCaseRow } from "@/hooks/useLabCases";
 import { useMoveCase, useCreateDentalLabCase, clientOf, patientOf, isRush, isOverdue } from "@/hooks/useDentalLab";
 import { CaseFiles } from "@/components/dlab/CaseFiles";
+import { useLabClientNames, canonicalClient, useClientPriceLookup } from "./dlabLinks";
 
 const money = (n: number) => `₦${Number(n || 0).toLocaleString()}`;
 
@@ -128,19 +129,34 @@ export function NewCaseDialog({ open, onOpenChange, defaultClient = "" }: { open
   const create = useCreateDentalLabCase();
   const blank = { client: defaultClient, doctor: "", patient: "", work_type: WORK_TYPES[0], teeth: "", shade: "", material: "", due_date: "", fee: "", instructions: "", rush: false };
   const [v, setV] = useState<Record<string, any>>(blank);
-  const set = (k: string, val: any) => setV((p) => ({ ...p, [k]: val }));
+  const names = useLabClientNames();
+  const priceFor = useClientPriceLookup();
+  const [feeTouched, setFeeTouched] = useState(false);
+  const agreed = priceFor(v.client, v.work_type);
+  const set = (k: string, val: any) => setV((p) => {
+    const next = { ...p, [k]: val };
+    if (!feeTouched && (k === "client" || k === "work_type")) {
+      const price = priceFor(next.client, next.work_type);
+      if (price !== null) next.fee = String(price);
+    }
+    return next;
+  });
   const submit = async () => {
     if (!v.client.trim()) return;
-    await create.mutateAsync(v);
+    await create.mutateAsync({ ...v, client: canonicalClient(v.client, names) });
+    setFeeTouched(false);
     setV(blank);
     onOpenChange(false);
   };
   return (
-    <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (o) setV({ ...blank, client: defaultClient }); }}>
+    <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (o) { setFeeTouched(false); setV({ ...blank, client: defaultClient }); } }}>
       <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>Receive a new case</DialogTitle></DialogHeader>
         <div className="grid gap-3 sm:grid-cols-2">
-          <F label="Client clinic *"><Input value={v.client} onChange={(e) => set("client", e.target.value)} /></F>
+          <F label="Client clinic *">
+            <Input list="dlab-client-names" value={v.client} onChange={(e) => set("client", e.target.value)} onBlur={() => set("client", canonicalClient(v.client, names))} />
+            <datalist id="dlab-client-names">{names.map((n) => <option key={n} value={n} />)}</datalist>
+          </F>
           <F label="Doctor"><Input value={v.doctor} onChange={(e) => set("doctor", e.target.value)} /></F>
           <F label="Patient"><Input value={v.patient} onChange={(e) => set("patient", e.target.value)} /></F>
           <F label="Work type">
@@ -153,7 +169,10 @@ export function NewCaseDialog({ open, onOpenChange, defaultClient = "" }: { open
           <F label="Shade"><Input placeholder="e.g. A2" value={v.shade} onChange={(e) => set("shade", e.target.value)} /></F>
           <F label="Material"><Input value={v.material} onChange={(e) => set("material", e.target.value)} /></F>
           <F label="Due date"><Input type="date" value={v.due_date} onChange={(e) => set("due_date", e.target.value)} /></F>
-          <F label="Fee (₦)"><Input type="number" value={v.fee} onChange={(e) => set("fee", e.target.value)} /></F>
+          <F label="Fee (₦)">
+            <Input type="number" value={v.fee} onChange={(e) => { setFeeTouched(true); set("fee", e.target.value); }} />
+            {agreed !== null && <p className="text-[11px] text-muted-foreground">Agreed price for this clinic: {money(agreed)}{feeTouched && Number(v.fee) !== agreed ? " (changed)" : ""}</p>}
+          </F>
           <label className="flex items-center gap-2 self-end pb-2 text-sm"><Checkbox checked={v.rush} onCheckedChange={(c) => set("rush", !!c)} />Rush case</label>
           <div className="sm:col-span-2"><F label="Instructions"><Textarea rows={3} value={v.instructions} onChange={(e) => set("instructions", e.target.value)} /></F></div>
         </div>
