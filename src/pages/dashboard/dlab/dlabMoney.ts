@@ -27,7 +27,7 @@ export function useClientSummaries() {
       if (!m.has(k)) m.set(k, { name, cases: 0, active: 0, late: 0, billed: 0, wip: 0, paid: 0, credits: 0, balance: 0, lastCase: null });
       return m.get(k)!;
     };
-    (cases.data || []).forEach((c) => {
+    (cases.data || []).filter((c) => c.status !== "cancelled").forEach((c) => {
       const s = get(clientOf(c));
       s.cases++;
       if (normalizeStage(c.status) !== "delivered") s.active++;
