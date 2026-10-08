@@ -161,15 +161,42 @@ export function Seo() {
       const schema = document.createElement("script");
       schema.type = "application/ld+json";
       schema.dataset.clinexusSchema = "true";
+      const orgId = `${origin}/#organization`;
+      const siteId = `${origin}/#website`;
       schema.textContent = JSON.stringify({
         "@context": "https://schema.org",
         "@graph": [
           {
             "@type": "Organization",
+            "@id": orgId,
+            name: "Clinexus",
+            alternateName: ["Clinexus Nigeria", "Clinexus Clinic Software"],
+            url: origin,
+            logo: { "@type": "ImageObject", url: `${origin}/pwa-icon-512.png`, width: 512, height: 512 },
+            image: `${origin}/clinexus-social-preview.jpg`,
+            description: defaultDescription,
+            address: {
+              "@type": "PostalAddress",
+              addressLocality: "Lagos",
+              addressCountry: "NG",
+            },
+            areaServed: "NG",
+            contactPoint: {
+              "@type": "ContactPoint",
+              contactType: "customer support",
+              areaServed: "NG",
+              availableLanguage: ["English"],
+              url: `${origin}/contact`,
+            },
+            sameAs: ["https://instagram.com/clinexus_ng", "https://x.com/clinexus_ng"],
+          },
+          {
+            "@type": "WebSite",
+            "@id": siteId,
             name: "Clinexus",
             url: origin,
-            logo: `${origin}/pwa-icon-512.png`,
-            sameAs: ["https://instagram.com/clinexus_ng", "https://x.com/clinexus_ng"],
+            inLanguage: "en-NG",
+            publisher: { "@id": orgId },
           },
           {
             "@type": "SoftwareApplication",
@@ -178,7 +205,8 @@ export function Seo() {
             operatingSystem: "Web",
             url: canonicalUrl,
             description: config.description,
-            publisher: { "@type": "Organization", name: "Clinexus", url: origin },
+            publisher: { "@id": orgId },
+            isPartOf: { "@id": siteId },
           },
         ],
       });
